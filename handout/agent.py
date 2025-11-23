@@ -138,6 +138,8 @@ class Agent(nn.Module):
         N, T, _ = rewards.shape
         device = rewards.device
 
+        n = min(n, T)
+
         # pad rewards: (N, T+n-1, 1)
         rewards_pad = torch.nn.functional.pad(rewards, pad=(0, 0, 0, n - 1))
 
