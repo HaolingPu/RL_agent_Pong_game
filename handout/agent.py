@@ -112,7 +112,7 @@ class Agent(nn.Module):
 
         with torch.no_grad():
             logits = self.policy(state)   #(1, action_Space)
-            probs = torch.softmax(logits, dim= -1)  #
+            probs = torch.softmax(logits, dim= -1).squeeze(0)  #
             action = torch.multinomial(probs, 1)   #(1,1)
 
         return int(action.item())
@@ -142,6 +142,8 @@ class Agent(nn.Module):
 
         # pad rewards: (N, T+n-1, 1)
         rewards_pad = torch.nn.functional.pad(rewards, pad=(0, 0, 0, n - 1))
+        
+        # cumsum = torch.cumsum(rewards_pad, dim=1)
 
         # sliding windows: (N, T, 1, n)
         windows = rewards_pad.unfold(dimension=1, size=n, step=1)
@@ -197,21 +199,19 @@ class Agent(nn.Module):
         # Refer to the handout for the value of n
 
 
-        N, T, S = states.shape
-
-        states_flat = states.view(N * T, S)
-        next_states_flat = next_states.view(N * T, S)
-
-        # V(s_t): need backprop
-        values = self.value(states_flat).view(N, T, 1)  # (N, T, 1)
+        # N, T, S = states.shape
 
         n = 10
-        with torch.no_grad():
-            # V(s_{t+1})
-            next_values = self.value(next_states_flat).view(N, T, 1)  # (N, T, 1)
-            #  n_step_returns get G_t^(n)
-            returns_n = self.n_step_returns(n, rewards, next_values, terminated)  # (N, T, 1)
+        # V(s_t): needs gradient
+        values = self.value(states)  # (N, T, 1)
 
+        with torch.no_grad():
+            # V(s_{t+1}): no gradient
+            next_state_values = self.value(next_states)  # (N, T, 1)
+            
+            # compute target = G_t^(n)
+            returns_n = self.n_step_returns(n, rewards, next_state_values, terminated)  # (N, T, 1)
+            
         # MSE( V(s_t), G_t^(n) )
         loss = nn.functional.mse_loss(values, returns_n)
         return loss
@@ -266,15 +266,15 @@ class Agent(nn.Module):
         next_states_flat = next_states.view(B, S)
 
         n = 10
+
+        values = self.value(states_flat).view(N, T, 1)   # keep grad OFF for policy
+
         with torch.no_grad():
-            # V(s_t)
-            values = self.value(states_flat).view(N, T, 1)          # (N, T, 1)
-            # V(s_{t+1})
-            next_values = self.value(next_states_flat).view(N, T, 1) # (N, T, 1)
-            # G_t^(n)
-            returns_n = self.n_step_returns(n, rewards, next_values, terminated)
-            # A_t = G_t^(n) - V(s_t)
-            advantages = returns_n - values                          # (N, T, 1)
+            next_states_values = self.value(next_states_flat).view(N, T, 1)
+            returns_n = self.n_step_returns(n, rewards, next_states_values, terminated)
+
+        # A_t = G_t^(n) - V(s_t), detach to avoid updating critic from actor loss
+        advantages = (returns_n - values).detach()                          # (N, T, 1)
 
         # log π_θ(a_t | s_t)
         logits = self.policy(states_flat)                             # (B, A)
